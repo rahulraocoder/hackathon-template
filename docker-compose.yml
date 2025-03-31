@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  spark-master:
+    image: bitnami/spark:3.3
+    container_name: spark-master
+    ports:
+      - "8080:8080"  # Spark UI
+      - "7077:7077"  # Master port
+    environment:
+      - SPARK_MODE=master
+    volumes:
+      - ./participant_template:/app
+      - ./test_data:/data
+
+  spark-worker:
+    image: bitnami/spark:3.3
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1g
+      - SPARK_WORKER_CORES=1
+    volumes:
+      - ./participant_template:/app
+      - ./test_data:/data
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: retail_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  data-generator:
+    build: ./data_generator
+    volumes:
+      - ./test_data:/data
+    environment:
+      DATA_LEVEL: 1  # Default level
+
+  evaluator:
+    build: ./evaluation
+    depends_on:
+      - spark-master
+    volumes:
+      - ./test_data:/data
+      - ./results:/results
+
+volumes:
+  postgres_data:
