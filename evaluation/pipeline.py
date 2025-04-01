@@ -70,12 +70,34 @@ class RetailTechPipeline:
     
     def transform(self, products, transactions, customers):
         """Enhanced business logic"""
+        print("\nDebugging transform step:")
+        print(f"Products schema: {products.schema}")
+        print(f"Transactions schema: {transactions.schema}")
+        print(f"Customers schema: {customers.schema}")
+        
         # Data quality checks
         transactions = data_quality_check(transactions)
+        print(f"\nAfter data quality check - Transactions count: {transactions.count()}")
+        
+        # Debug join keys
+        print("\nJoin keys verification:")
+        print(f"Unique product_ids in products: {products.select('product_id').distinct().count()}")
+        print(f"Unique product_ids in transactions: {transactions.select('product_id').distinct().count()}")
+        print(f"Unique cust_ids in customers: {customers.select('cust_id').distinct().count()}")
+        print(f"Unique cust_ids in transactions: {transactions.select('cust_id').distinct().count()}")
         
         # Join with customer data
         joined = transactions.join(products, ["product_id"]) \
                     .join(customers, ["cust_id"])
+        print(f"\nAfter joins - Row count: {joined.count()}")
+        if joined.count() == 0:
+            print("Warning: Join produced no results!")
+            print("Sample products:")
+            products.show(5)
+            print("Sample transactions:")
+            transactions.show(5)
+            print("Sample customers:")
+            customers.show(5)
         
         # Enhanced metrics
         metrics = joined.groupBy(
@@ -88,22 +110,43 @@ class RetailTechPipeline:
             first(customers["email"]).alias("customer_email"),
             first(customers["name"]).alias("customer_name")
         )
+        print(f"\nFinal metrics count: {metrics.count()}")
         
         return metrics
     
     def save(self, df, path):
         """Save results with partitioning"""
-        df.write.mode("overwrite") \
-           .partitionBy("category") \
-           .parquet(f"{path}/metrics")
+        try:
+            print(f"Attempting to save metrics to {path}/metrics")
+            print(f"DataFrame schema: {df.schema}")
+            print(f"Row count before save: {df.count()}")
+            
+            df.write.mode("overwrite") \
+               .partitionBy("category") \
+               .parquet(f"{path}/metrics")
+               
+            print("Successfully saved metrics")
+        except Exception as e:
+            print(f"Failed to save metrics: {str(e)}")
+            raise
 
 if __name__ == "__main__":
     import sys
     pipeline = RetailTechPipeline()
     
-    input_path = sys.argv[1] if len(sys.argv) > 1 else "/data/level_1"
+    input_path = sys.argv[1] if len(sys.argv) > 1 else "/data/test_data/level_1"
     output_path = sys.argv[2] if len(sys.argv) > 2 else "/results"
     
-    products, transactions, customers = pipeline.ingest(input_path)
-    metrics = pipeline.transform(products, transactions, customers)
-    pipeline.save(metrics, output_path)
+    try:
+        print("Starting pipeline execution")
+        products, transactions, customers = pipeline.ingest(input_path)
+        print(f"Loaded {products.count()} products, {transactions.count()} transactions, {customers.count()} customers")
+        
+        metrics = pipeline.transform(products, transactions, customers)
+        print(f"Transformed metrics contains {metrics.count()} rows")
+        
+        pipeline.save(metrics, output_path)
+        print("Pipeline completed successfully")
+    except Exception as e:
+        print(f"Pipeline failed: {str(e)}")
+        raise

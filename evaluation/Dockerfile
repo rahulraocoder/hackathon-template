@@ -11,4 +11,5 @@ COPY pipeline.py .
 COPY utils.py .
 
 # Set entry point
-CMD ["python", "pipeline.py", "/data/level_1", "/results"]
+# Keep container running after execution
+CMD ["tail", "-f", "/dev/null"]

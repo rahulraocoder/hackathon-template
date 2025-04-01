@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   spark-master:
@@ -9,6 +8,12 @@ services:
       - "7077:7077"  # Master port
     environment:
       - SPARK_MODE=master
+      - JAVA_HOME=/opt/bitnami/java
+      - SPARK_DAEMON_JAVA_OPTS=-Duser.home=/opt/bitnami/spark -Divy.home=/opt/bitnami/spark/.ivy2 -Dspark.jars.ivy=/opt/bitnami/spark/.ivy2
+      - SPARK_LOCAL_DIRS=/opt/bitnami/spark/tmp
+      - SPARK_CONF_DIR=/opt/bitnami/spark/conf
+      - SPARK_HOME=/opt/bitnami/spark
+      - IVY_HOME=/opt/bitnami/spark/.ivy2
     volumes:
       - ./participant_template:/app
       - ./test_data:/data/test_data
