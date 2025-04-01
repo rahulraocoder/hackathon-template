@@ -47,20 +47,22 @@ class RetailTechPipeline:
             .schema(transaction_schema) \
             .csv(f"{data_path}/transactions.csv") \
             .select("product_id", "quantity", "total", "order_date", "cust_id")
-        # Define customer schema
+        # Define customer schema to match actual JSON structure
         customer_schema = StructType([
-            StructField("cust_id", StringType()),
-            StructField("name", StringType()),
-            StructField("email", StringType()),
-            StructField("phone", StringType())
+            StructField("id", StringType(), True),  # Note field is 'id' not 'cust_id'
+            StructField("name", StringType(), True),
+            StructField("email", StringType(), True),
+            StructField("phone", StringType(), True)
         ])
         
         # Read with explicit schema and multiLine mode
-        customers = self.spark.read \
-            .option("multiLine", True) \
-            .schema(customer_schema) \
-            .json(f"{data_path}/customers.json") \
+        customers = (self.spark.read
+            .option("multiLine", True)
+            .schema(customer_schema)
+            .json(f"{data_path}/customers.json")
+            .withColumnRenamed("id", "cust_id")  # Rename to match join key
             .select("cust_id", "name", "email", "phone")
+        )
         
         validate_schema(products, "products")
         validate_schema(transactions, "transactions")
@@ -86,9 +88,9 @@ class RetailTechPipeline:
         print(f"Unique cust_ids in customers: {customers.select('cust_id').distinct().count()}")
         print(f"Unique cust_ids in transactions: {transactions.select('cust_id').distinct().count()}")
         
-        # Join with customer data
+        # Join with customer data - ensure all DataFrames have matching key names
         joined = transactions.join(products, ["product_id"]) \
-                    .join(customers, ["cust_id"])
+                    .join(customers, ["cust_id"], "left")  # Use left join to preserve all transactions
         print(f"\nAfter joins - Row count: {joined.count()}")
         if joined.count() == 0:
             print("Warning: Join produced no results!")
