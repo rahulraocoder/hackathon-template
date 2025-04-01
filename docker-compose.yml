@@ -11,7 +11,10 @@ services:
       - SPARK_MODE=master
     volumes:
       - ./participant_template:/app
-      - ./test_data:/data
+      - ./test_data:/data/test_data
+      - ./test_data:/app/test_data
+      - ./test_data:/test_data
+      - ./submissions:/data/submissions
 
   spark-worker:
     image: bitnami/spark:3.3
@@ -25,7 +28,8 @@ services:
       - SPARK_WORKER_CORES=1
     volumes:
       - ./participant_template:/app
-      - ./test_data:/data
+      - ./test_data:/app/test_data
+      - ./test_data:/data/test_data
 
   postgres:
     image: postgres:13
@@ -41,7 +45,9 @@ services:
   data-generator:
     build: ./data_generator
     volumes:
-      - ./test_data:/data
+      - ./test_data:/data/test_data
+      - ./test_data:/app/test_data
+      - ./test_data:/test_data
     environment:
       DATA_LEVEL: 1  # Default level
 
@@ -50,8 +56,10 @@ services:
     depends_on:
       - spark-master
     volumes:
-      - ./test_data:/data
+      - ./test_data:/data/test_data
       - ./results:/results
+      - ./evaluation:/app
+      - ./evaluation/evaluate.py:/app/evaluate.py
 
 volumes:
   postgres_data:
