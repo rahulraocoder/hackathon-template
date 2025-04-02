@@ -12,16 +12,38 @@ class Evaluator:
         self.weights = {
             'data_quality': 0.7,
             'business_insights': 0.2,
-            'output_format': 0.1  
+            'output_format': 0.1,
+            'performance': 0.0  
+        }
+        self.benchmarks = {  # Time benchmarks in seconds
+            'basic': 30,
+            'intermediate': 60,
+            'advanced': 120  
         }
 
     async def evaluate(self, 
                       data_quality: UploadFile,
                       insights: UploadFile,
-                      cleaned_data: UploadFile) -> Dict:
+                      cleaned_data: UploadFile,
+                      processing_time: float = None) -> Dict:
         """Evaluate participant submission"""
         score = 0
         details = {}
+        performance = {}
+        
+        # Calculate performance score if time provided
+        if processing_time:
+            # Determine dataset tier based on size
+            data_size = len(await cleaned_data.read())
+            tier = 'basic' if data_size < 1000000 else 'intermediate' if data_size < 5000000 else 'advanced'
+            
+            # Score based on benchmark (100 for meeting benchmark, scales down)
+            perf_score = max(0, 100 * (self.benchmarks[tier] / processing_time))
+            performance = {
+                'processing_time': processing_time,
+                'benchmark': self.benchmarks[tier],
+                'score': perf_score
+            }
         
         # Validate data quality report
         dq_report = DataQualityReport.parse_obj(await self._parse_upload_file(data_quality))
@@ -41,10 +63,16 @@ class Evaluator:
                 details['business_insights']['score'] * self.weights['business_insights'] +
                 details['output_format']['score'] * self.weights['output_format'])
         
+        # Include performance score if available
+        if performance:
+            score += performance['score'] * self.weights['performance']
+            details['performance'] = performance
+            
         return {
             'status': 'success',
-            'score': round(score, 2),
-            'details': details
+            'score': min(round(score, 2), 100),  # Cap at 100
+            'details': details,
+            'performance': performance
         }
 
     async def _parse_upload_file(self, file: UploadFile):

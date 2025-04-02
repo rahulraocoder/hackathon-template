@@ -26,9 +26,40 @@ async def evaluate_submission(
 ):
     """Main evaluation endpoint that validates participant submissions"""
     try:
-        return await evaluator.evaluate(data_quality, insights, cleaned_data)
+        # Save uploaded files temporarily
+        with open("temp_data_quality.json", "wb") as f:
+            f.write(await data_quality.read())
+        with open("temp_insights.json", "wb") as f:
+            f.write(await insights.read())
+        with open("temp_cleaned_data.json", "wb") as f:
+            f.write(await cleaned_data.read())
+            
+        # For evaluation, we already have processed outputs
+        pipeline = DataPipeline()
+        result = {
+            "data_quality": DataQualityReport.parse_file("temp_data_quality.json"),
+            "insights": BusinessInsights.parse_file("temp_insights.json"),
+            "cleaned_data": json.load(open("temp_cleaned_data.json")),
+            "processing_time": 0  # Not tracking time for submissions
+        }
+        
+        # Evaluate with processing time
+        return await evaluator.evaluate(
+            data_quality=UploadFile(filename="data_quality.json", file=open("temp_data_quality.json")),
+            insights=UploadFile(filename="insights.json", file=open("temp_insights.json")),
+            cleaned_data=UploadFile(filename="cleaned_data.json", file=open("temp_cleaned_data.json")),
+            processing_time=result.get("processing_time")
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Clean up temp files
+        import os
+        for f in ["temp_data_quality.json", "temp_insights.json", "temp_cleaned_data.json"]:
+            try:
+                os.remove(f)
+            except:
+                pass
 
 # Required Endpoints (participants must implement these)
 @app.get("/api/schema")

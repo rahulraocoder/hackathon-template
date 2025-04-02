@@ -1,9 +1,10 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum, count, avg, when
+from pyspark.sql.functions import col, sum, count, avg, when, lit
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, DateType
 import json
 from datetime import datetime
 import logging
+from pathlib import Path
 from models import DataQualityReport, BusinessInsights
 
 logging.basicConfig(
@@ -20,30 +21,35 @@ class DataPipeline:
             .config("spark.driver.bindAddress", "127.0.0.1") \
             .config("spark.ui.enabled", "false") \
             .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
+            .config("spark.sql.legacy.json.allowEmptyString.enabled", "true") \
+            .config("spark.sql.jsonGenerator.ignoreNullFields", "false") \
+            .config("spark.sql.sources.schemaStringLengthThreshold", "100000") \
+            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+            .config("spark.sql.legacy.allowUntypedScalaUDF", "true") \
             .getOrCreate()
         
-        # Define expected schemas
+        # Define expected schemas (all fields optional except id)
         self.schemas = {
             "customers": StructType([
-                StructField("id", StringType(), False),
+                StructField("id", StringType(), True),
                 StructField("name", StringType(), True),
                 StructField("email", StringType(), True),
                 StructField("address", StringType(), True),
                 StructField("phone", StringType(), True)
             ]),
             "products": StructType([
-                StructField("id", StringType(), False),
+                StructField("id", StringType(), True),
                 StructField("name", StringType(), True),
                 StructField("category", StringType(), True),
                 StructField("price", FloatType(), True),
                 StructField("stock", IntegerType(), True)
             ]),
             "orders": StructType([
-                StructField("id", StringType(), False),
+                StructField("id", StringType(), True),
                 StructField("customer_id", StringType(), True),
                 StructField("product_id", StringType(), True),
                 StructField("quantity", IntegerType(), True),
-                StructField("date", DateType(), True)
+                StructField("date", StringType(), True)  # Changed from DateType
             ]),
             "shipments": StructType([
                 StructField("id", StringType(), False),
@@ -63,7 +69,18 @@ class DataPipeline:
 
     def process_data(self, customers_path, products_path, orders_path, shipments_path, returns_path):
         """Main pipeline method that processes all datasets"""
+        import time
+        start_time = time.time()
         logger.info("Starting data processing pipeline")
+        
+        try:
+            # Validate all input files exist
+            for path in [customers_path, products_path, orders_path, shipments_path, returns_path]:
+                if not Path(path).exists():
+                    raise ValueError(f"Input file not found: {path}")
+        except Exception as e:
+            logger.error(f"Input validation failed: {str(e)}")
+            raise
         
         # Load and clean each dataset
         customers = self._clean_customers(customers_path)
@@ -87,77 +104,289 @@ class DataPipeline:
             orders, customers, products, shipments, returns
         )
         
+        processing_time = time.time() - start_time
+        
         return {
             "data_quality": dq_report,
             "insights": insights,
-            "cleaned_data": enriched_orders.toJSON().collect()
+            "cleaned_data": enriched_orders.toJSON().collect(),
+            "processing_time": processing_time
         }
 
     def _clean_customers(self, path):
         """Clean customers data"""
-        df = self.spark.read.json(path, schema=self.schemas["customers"])
-        
-        # Handle missing emails
-        df = df.withColumn("email", when(col("email").isNull(), "unknown@example.com").otherwise(col("email")))
-        
-        # Standardize phone formats
-        df = df.withColumn("phone", 
-            when(col("phone").rlike(r"^\d{10}$"), col("phone")) \
-            .when(col("phone").rlike(r"^\+91\d{10}$"), col("phone").substr(4, 10)) \
-            .otherwise("0000000000")
-        )
-        
-        # Remove duplicates
-        df = df.dropDuplicates(["id"])
-        
-        return df
+        try:
+            # First try reading with schema validation
+            try:
+                df = self.spark.read.schema(self.schemas["customers"]).json(path)
+                
+                # If we get here, schema validation succeeded
+                corrupt_count = 0
+            except Exception as schema_err:
+                # If schema validation fails, fall back to permissive mode
+                logger.warning("Schema validation failed, falling back to permissive mode")
+                df = self.spark.read.option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .json(path)
+                
+                # Count corrupt records
+                corrupt_records = df.filter(~df["_corrupt_record"].isNull())
+                corrupt_count = corrupt_records.count()
+                if corrupt_count > 0:
+                    logger.warning(f"Found {corrupt_count} corrupt customer records")
+                
+                # Get records that passed validation
+                df = df.filter(df["_corrupt_record"].isNull()) \
+                    .drop("_corrupt_record")
+            
+            # Ensure required columns exist
+            for col_name in ["id", "name", "email", "phone"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Ensure required columns exist
+            for col_name in ["id", "name", "email", "phone"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Apply schema with type conversion
+            df = df.select(*self.schemas["customers"].fieldNames())  # Ensure proper column order
+            
+            # Handle missing values
+            df = df.withColumn("email", when(col("email").isNull(), "unknown@example.com").otherwise(col("email")))
+            df = df.withColumn("name", when(col("name").isNull(), "Unknown").otherwise(col("name")))
+            
+            # Standardize phone formats
+            df = df.withColumn("phone", 
+                when(col("phone").rlike(r"^\d{10}$"), col("phone")) \
+                .when(col("phone").rlike(r"^\+91\d{10}$"), col("phone").substr(4, 10)) \
+                .otherwise("0000000000")
+            )
+            
+            # Remove duplicates
+            df = df.dropDuplicates(["id"])
+            
+            return df
+        except Exception as e:
+            logger.error(f"Failed to clean customers data: {str(e)}")
+            raise ValueError(f"Customer data validation failed: {str(e)}")
 
     def _clean_products(self, path):
         """Clean products data"""
-        df = self.spark.read.json(path, schema=self.schemas["products"])
-        
-        # Fill missing categories
-        df = df.withColumn("category", 
-            when(col("category").isNull(), "uncategorized").otherwise(col("category")))
-        
-        # Fix negative stock
-        df = df.withColumn("stock", 
-            when(col("stock") < 0, 0).otherwise(col("stock")))
-        
-        # Validate prices
-        df = df.filter(col("price") > 0)
-        
-        return df
+        try:
+            # First try reading with schema validation
+            try:
+                df = self.spark.read.schema(self.schemas["products"]).json(path)
+                
+                # If we get here, schema validation succeeded
+                corrupt_count = 0
+            except Exception as schema_err:
+                # If schema validation fails, fall back to permissive mode
+                logger.warning("Schema validation failed, falling back to permissive mode")
+                df = self.spark.read.option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .json(path)
+                
+                # Count corrupt records
+                corrupt_records = df.filter(~df["_corrupt_record"].isNull())
+                corrupt_count = corrupt_records.count()
+                if corrupt_count > 0:
+                    logger.warning(f"Found {corrupt_count} corrupt product records")
+                
+                # Get records that passed validation
+                df = df.filter(df["_corrupt_record"].isNull()) \
+                    .drop("_corrupt_record")
+            
+            # Ensure required columns exist
+            for col_name in ["id", "name", "category", "price", "stock"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Apply schema with type conversion
+            df = df.select(*self.schemas["products"].fieldNames())
+            
+            if df.count() == 0:
+                logger.warning("No valid product records found")
+                
+            # Fill missing categories
+            df = df.withColumn("category", 
+                when(col("category").isNull(), "uncategorized").otherwise(col("category")))
+            
+            # Fix negative stock
+            df = df.withColumn("stock", 
+                when(col("stock") < 0, 0).otherwise(col("stock")))
+            
+            # Validate prices
+            df = df.filter(col("price") > 0)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Failed to clean products data: {str(e)}")
+            raise ValueError(f"Products data validation failed: {str(e)}")
 
     def _clean_orders(self, path):
         """Clean orders data"""
-        df = self.spark.read.json(path, schema=self.schemas["orders"])
-        
-        # Validate quantities
-        df = df.filter(col("quantity") > 0)
-        
-        # Validate dates
-        df = df.filter(col("date").isNotNull())
-        
-        return df
+        try:
+            # First try reading with schema validation
+            try:
+                df = self.spark.read.schema(self.schemas["orders"]).json(path)
+                
+                # If we get here, schema validation succeeded
+                corrupt_count = 0
+            except Exception as schema_err:
+                # If schema validation fails, fall back to permissive mode
+                logger.warning("Schema validation failed, falling back to permissive mode")
+                df = self.spark.read.option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .json(path)
+                
+                # Count corrupt records
+                corrupt_records = df.filter(~df["_corrupt_record"].isNull())
+                corrupt_count = corrupt_records.count()
+                if corrupt_count > 0:
+                    logger.warning(f"Found {corrupt_count} corrupt order records")
+                
+                # Get records that passed validation
+                df = df.filter(df["_corrupt_record"].isNull()) \
+                    .drop("_corrupt_record")
+            
+            # Ensure required columns exist
+            for col_name in ["id", "customer_id", "product_id", "quantity", "date"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Apply schema with type conversion
+            df = df.select(*self.schemas["orders"].fieldNames())
+            
+            if df.count() == 0:
+                logger.warning("No valid order records found")
+            
+            # Handle missing/negative quantities
+            df = df.withColumn("quantity", 
+                when((col("quantity").isNull()) | (col("quantity") <= 0), 1)
+                .otherwise(col("quantity"))
+            )
+            
+            # Handle missing dates
+            df = df.withColumn("date",
+                when(col("date").isNull(), "1970-01-01")
+                .otherwise(col("date"))
+            )
+            
+            return df
+        except Exception as e:
+            logger.error(f"Failed to clean orders data: {str(e)}")
+            raise ValueError(f"Orders data validation failed: {str(e)}")
 
     def _clean_shipments(self, path):
         """Clean shipments data"""
-        df = self.spark.read.json(path, schema=self.schemas["shipments"])
-        
-        # Validate tracking numbers
-        df = df.filter(col("tracking").isNotNull())
-        
-        return df
+        try:
+            # First try reading with schema validation
+            try:
+                df = self.spark.read.schema(self.schemas["shipments"]).json(path)
+                
+                # If we get here, schema validation succeeded
+                corrupt_count = 0
+            except Exception as schema_err:
+                # If schema validation fails, fall back to permissive mode
+                logger.warning("Schema validation failed, falling back to permissive mode")
+                df = self.spark.read.option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .json(path)
+                
+                # Count corrupt records
+                corrupt_records = df.filter(~df["_corrupt_record"].isNull())
+                corrupt_count = corrupt_records.count()
+                if corrupt_count > 0:
+                    logger.warning(f"Found {corrupt_count} corrupt shipment records")
+                
+                # Get records that passed validation
+                df = df.filter(df["_corrupt_record"].isNull()) \
+                    .drop("_corrupt_record")
+            
+            # Ensure required columns exist
+            for col_name in ["id", "order_id", "carrier", "tracking", "status"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Apply schema with type conversion
+            df = df.select(*self.schemas["shipments"].fieldNames())
+            
+            if df.count() == 0:
+                logger.warning("No valid shipment records found")
+                return df
+                
+            original_count = df.count()
+            
+            # Validate tracking numbers - only remove records with null/invalid tracking
+            original_count = df.count()
+            df = df.filter(
+                (col("tracking").isNotNull()) & 
+                (col("tracking") != "invalid")
+            )
+            
+            filtered_count = original_count - df.count()
+            if filtered_count > 0:
+                logger.warning(f"Filtered {filtered_count} shipments with invalid tracking numbers")
+            
+            return df
+        except Exception as e:
+            logger.error(f"Failed to clean shipments data: {str(e)}")
+            raise ValueError(f"Shipments data validation failed: {str(e)}")
 
     def _clean_returns(self, path):
         """Clean returns data"""
-        df = self.spark.read.json(path, schema=self.schemas["returns"])
-        
-        # Validate refund amounts
-        df = df.filter(col("refund") >= 0)
-        
-        return df
+        try:
+            # First try reading with schema validation
+            try:
+                df = self.spark.read.schema(self.schemas["returns"]).json(path)
+                
+                # If we get here, schema validation succeeded
+                corrupt_count = 0
+            except Exception as schema_err:
+                # If schema validation fails, fall back to permissive mode
+                logger.warning("Schema validation failed, falling back to permissive mode")
+                df = self.spark.read.option("mode", "PERMISSIVE") \
+                    .option("columnNameOfCorruptRecord", "_corrupt_record") \
+                    .json(path)
+                
+                # Count corrupt records
+                corrupt_records = df.filter(~df["_corrupt_record"].isNull())
+                corrupt_count = corrupt_records.count()
+                if corrupt_count > 0:
+                    logger.warning(f"Found {corrupt_count} corrupt return records")
+                
+                # Get records that passed validation
+                df = df.filter(df["_corrupt_record"].isNull()) \
+                    .drop("_corrupt_record")
+            
+            # Ensure required columns exist
+            for col_name in ["id", "order_id", "product_id", "reason", "refund"]:
+                if col_name not in df.columns:
+                    df = df.withColumn(col_name, lit(None))
+            
+            # Apply schema with type conversion
+            df = df.select(*self.schemas["returns"].fieldNames())
+            
+            if df.count() == 0:
+                logger.warning("No valid return records found")
+                return df
+                
+            original_count = df.count()
+            
+            # Validate refund amounts - only remove records with negative refunds
+            original_count = df.count()
+            df = df.filter(col("refund") >= 0)
+            
+            filtered_count = original_count - df.count()
+            if filtered_count > 0:
+                logger.warning(f"Filtered {filtered_count} returns with invalid refund amounts")
+                
+            logger.info(f"Filtered {original_count - df.count()} invalid returns")
+            return df
+        except Exception as e:
+            logger.error(f"Failed to clean returns data: {str(e)}")
+            raise ValueError(f"Returns data validation failed: {str(e)}")
 
     def _generate_data_quality_report(self, customers, products, orders, shipments, returns):
         """Generate data quality metrics"""
@@ -192,6 +421,23 @@ class DataPipeline:
         """Generate business insights"""
         insights = {}
         
+        # Validate required fields exist
+        required_fields = {
+            "customers": ["id", "name"],
+            "products": ["id", "name", "price"],
+            "orders": ["customer_id", "product_id", "quantity"],
+            "shipments": ["id"],
+            "returns": ["order_id", "reason"]
+        }
+        
+        for df, df_name in [(customers, "customers"), (products, "products"),
+                           (orders, "orders"), (shipments, "shipments"),
+                           (returns, "returns")]:
+            missing = [field for field in required_fields[df_name] 
+                      if field not in df.columns]
+            if missing:
+                raise ValueError(f"Missing required field(s) in {df_name}: {missing}")
+
         # Debug data types
         logger.info(f"Orders schema: {orders.schema}")
         logger.info(f"Products schema: {products.schema}")

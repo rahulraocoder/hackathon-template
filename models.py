@@ -16,3 +16,4 @@ class EvaluationResponse(BaseModel):
     status: str
     score: float
     details: Dict[str, Any]
+    performance: Dict[str, Any]
