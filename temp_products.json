@@ -1,0 +1,16 @@
+[
+    {
+        "id": 101,
+        "name": "Wireless Headphones",
+        "category": "Electronics",
+        "price": 99.99,
+        "stock": 50
+    },
+    {
+        "id": 102,
+        "name": "Smart Watch",
+        "category": null,
+        "price": 199.99,
+        "stock": -5
+    }
+]

@@ -1,0 +1,16 @@
+[
+    {
+        "id": 1001,
+        "customer_id": 1,
+        "product_id": 101,
+        "quantity": 2,
+        "date": "2025-01-15"
+    },
+    {
+        "id": 1002,
+        "customer_id": 2,
+        "product_id": 102,
+        "quantity": -1,
+        "date": "invalid-date"
+    }
+]
