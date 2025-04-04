@@ -4,6 +4,7 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType, 
 import json
 from datetime import datetime
 import logging
+import os
 from pathlib import Path
 from models import DataQualityReport, BusinessInsights
 
@@ -15,18 +16,27 @@ logger = logging.getLogger(__name__)
 
 class DataPipeline:
     def __init__(self):
-        self.spark = SparkSession.builder \
-            .appName("RetailDataPipeline") \
-            .config("spark.driver.host", "localhost") \
-            .config("spark.driver.bindAddress", "127.0.0.1") \
-            .config("spark.ui.enabled", "false") \
-            .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
-            .config("spark.sql.legacy.json.allowEmptyString.enabled", "true") \
-            .config("spark.sql.jsonGenerator.ignoreNullFields", "false") \
-            .config("spark.sql.sources.schemaStringLengthThreshold", "100000") \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-            .config("spark.sql.legacy.allowUntypedScalaUDF", "true") \
-            .getOrCreate()
+        logger.info("Initializing SparkSession")
+        try:
+            self.spark = SparkSession.builder \
+                .appName("RetailDataPipeline") \
+                .master("local[*]") \
+                .config("spark.driver.host", "worker") \
+                .config("spark.driver.bindAddress", "0.0.0.0") \
+                .config("spark.ui.enabled", "false") \
+                .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
+                .config("spark.sql.legacy.json.allowEmptyString.enabled", "true") \
+                .config("spark.sql.jsonGenerator.ignoreNullFields", "false") \
+                .config("spark.sql.sources.schemaStringLengthThreshold", "100000") \
+                .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+                .config("spark.sql.legacy.allowUntypedScalaUDF", "true") \
+                .config("spark.jars.packages", "org.apache.spark:spark-avro_2.12:3.5.0") \
+                .getOrCreate()
+            logger.info("SparkSession initialized successfully")
+            logger.info(f"Spark version: {self.spark.version}")
+        except Exception as e:
+            logger.error(f"Failed to initialize SparkSession: {str(e)}", exc_info=True)
+            raise
         
         # Define expected schemas (all fields optional except id)
         self.schemas = {
@@ -74,12 +84,16 @@ class DataPipeline:
         logger.info("Starting data processing pipeline")
         
         try:
-            # Validate all input files exist
+            # Validate all input files exist with verbose logging
+            logger.info("Validating input files:")
             for path in [customers_path, products_path, orders_path, shipments_path, returns_path]:
-                if not Path(path).exists():
+                path_obj = Path(path)
+                logger.info(f"Checking {path} - exists: {path_obj.exists()}")
+                if not path_obj.exists():
                     raise ValueError(f"Input file not found: {path}")
+                logger.info(f"File {path} readable: {os.access(path, os.R_OK)}")
         except Exception as e:
-            logger.error(f"Input validation failed: {str(e)}")
+            logger.error(f"Input validation failed: {str(e)}", exc_info=True)
             raise
         
         # Load and clean each dataset
@@ -106,11 +120,36 @@ class DataPipeline:
         
         processing_time = time.time() - start_time
         
+        # Calculate data quality score (0-100 scale)
+        total_records = (
+            customers.count() +
+            products.count() +
+            orders.count() +
+            shipments.count() +
+            returns.count()
+        )
+        valid_records = (
+            customers.filter(col("id").isNotNull()).count() +
+            products.filter(col("id").isNotNull()).count() +
+            orders.filter(col("id").isNotNull()).count() +
+            shipments.filter(col("id").isNotNull()).count() +
+            returns.filter(col("id").isNotNull()).count()
+        )
+        data_quality_score = int((valid_records / total_records) * 100) if total_records > 0 else 0
+
         return {
             "data_quality": dq_report,
             "insights": insights,
             "cleaned_data": enriched_orders.toJSON().collect(),
-            "processing_time": processing_time
+            "processing_time": processing_time,
+            "score": data_quality_score,
+            "metrics": {
+                "total_records": total_records,
+                "valid_records": valid_records,
+                "data_quality_score": data_quality_score,
+                "top_customers": insights.top_customers[:3],
+                "top_products": insights.top_products[:3]
+            }
         }
 
     def _clean_customers(self, path):

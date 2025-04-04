@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7.2
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+  worker:
+    build: .
+    command: bash -c "mkdir -p /var/log/worker && chmod -R 777 /var/log/worker && CELERYD_FORCE_EXECV=true celery -A celery_app worker --loglevel=info --pool=solo --without-heartbeat --without-mingle --without-gossip"
+    volumes:
+      - .:/app
+      - worker_logs:/var/log/worker
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - web
+    restart: always
+
+  web:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: always
+
+volumes:
+  redis_data:
+  worker_logs:
