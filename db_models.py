@@ -6,6 +6,12 @@ from datetime import datetime
 
 Base = declarative_base()
 
+class TeamSubmissionCount(Base):
+    __tablename__ = 'team_limits'
+    
+    team_name = Column(String, primary_key=True)
+    submissions = Column(Integer, default=0)
+
 class SubmissionResult(Base):
     __tablename__ = 'submission_results'
     

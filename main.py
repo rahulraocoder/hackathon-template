@@ -1,9 +1,40 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, WebSocket
+from fastapi.websockets import WebSocketDisconnect
+import asyncio
+import json
+from sqlalchemy import func
 from worker import process_submission
 from db_models import Session, SubmissionResult
 from datetime import datetime
 import uuid
 import logging
+from typing import Dict, List
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, team: str):
+        await websocket.accept()
+        if team not in self.active_connections:
+            self.active_connections[team] = []
+        self.active_connections[team].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, team: str):
+        if team in self.active_connections:
+            self.active_connections[team].remove(websocket)
+            if not self.active_connections[team]:
+                del self.active_connections[team]
+
+    async def broadcast(self, message: str, team: str):
+        if team in self.active_connections:
+            for connection in self.active_connections[team]:
+                try:
+                    await connection.send_text(message)
+                except:
+                    self.disconnect(connection, team)
+
+manager = ConnectionManager()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +60,15 @@ class SubmissionData(BaseModel):
 class SubmissionRequest(BaseModel):
     data: SubmissionData
     team_name: str = None
+
+@app.websocket("/ws/scores")
+async def websocket_endpoint(websocket: WebSocket, team: str):
+    await manager.connect(websocket, team)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, team)
 
 @app.post("/api/submit")
 async def submit_data(request: SubmissionRequest = Body(...)):

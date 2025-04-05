@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  evaluator:
+    build: .
+    ports:
+      - "9000:8000"
+    volumes:
+      - evaluator-data:/data
+      - ./evaluation.db:/app/evaluation.db
+      - ../shared/data:/data
+
+    environment:
+      - DATABASE_URL=sqlite:///./evaluation.db
+
+volumes:
+  evaluator-data:
