@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Body
-from celery_app import process_submission
+from worker import process_submission
 from db_models import Session, SubmissionResult
 from datetime import datetime
 import uuid

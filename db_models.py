@@ -1,3 +1,4 @@
+import uuid
 from sqlalchemy import create_engine, Column, String, Integer, Float, JSON, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -8,7 +9,7 @@ Base = declarative_base()
 class SubmissionResult(Base):
     __tablename__ = 'submission_results'
     
-    id = Column(String, primary_key=True)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     participant_id = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     status = Column(String)
