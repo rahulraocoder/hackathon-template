@@ -1,11 +1,19 @@
 import os
+from datetime import datetime
 import json
 import argparse
+import time
 from collections import defaultdict
 import requests
+from monitoring import monitor
+from dotenv import load_dotenv
+load_dotenv()
 
-def analyze_data(customers_path, products_path, orders_path, shipments_path, returns_path):
-    """Analyze datasets and compute required metrics"""
+@monitor(output_file="pipeline_metrics.json")
+def run_pipeline(customers_path, products_path, orders_path, shipments_path, returns_path):
+    # Add small delay to ensure measurable CPU usage
+    time.sleep(0.5)
+    """Execute pipeline and compute required metrics"""
     # Load all data files
     with open(customers_path) as f: customers = json.load(f)
     with open(products_path) as f: products = json.load(f)
@@ -87,7 +95,7 @@ def analyze_data(customers_path, products_path, orders_path, shipments_path, ret
         'return_reason_analysis': return_metrics
     }
 
-def submit_to_evaluator(metrics):
+def submit_to_evaluator(business_metrics, perf_metrics):
     """Submit computed metrics to evaluator"""
     evaluator_url = os.getenv('EVALUATOR_URL')
     api_key = os.getenv('API_KEY')
@@ -100,8 +108,24 @@ def submit_to_evaluator(metrics):
         'Authorization': api_key
     }
     
+    payload = {
+        "business_metrics": {
+            "top_5_customers_by_total_spend": business_metrics["top_5_customers_by_total_spend"],
+            "top_5_products_by_revenue": business_metrics["top_5_products_by_revenue"],
+            "shipping_performance_by_carrier": business_metrics["shipping_performance_by_carrier"],
+            "return_reason_analysis": business_metrics["return_reason_analysis"]
+        },
+        "performance_metrics": {
+            "duration_sec": perf_metrics["duration_sec"],
+            "cpu_avg": perf_metrics["cpu_avg"],
+            "memory_avg": perf_metrics["memory_avg"],
+            "sample_count": perf_metrics["sample_count"],
+            "status": perf_metrics["status"]
+        }
+    }
+    
     try:
-        response = requests.post(evaluator_url, json=metrics, headers=headers)
+        response = requests.post(evaluator_url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -117,17 +141,19 @@ if __name__ == '__main__':
     parser.add_argument('--returns', default=os.getenv('RETURNS_PATH'))
     args = parser.parse_args()
 
-    metrics = analyze_data(
+    metrics, perf_metrics = run_pipeline(
         args.customers,
         args.products,
         args.orders,
         args.shipments,
         args.returns
     )
+    print("\nPerformance metrics:")
+    print(json.dumps(perf_metrics, indent=2))
     
     print("Computed metrics:")
     print(json.dumps(metrics, indent=2))
     
-    eval_response = submit_to_evaluator(metrics)
+    eval_response = submit_to_evaluator(metrics, perf_metrics)
     print("\nEvaluator response:")
     print(json.dumps(eval_response, indent=2))
