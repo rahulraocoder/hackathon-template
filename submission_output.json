@@ -1,1 +1,0 @@
-{"data_quality":{"missing_values":{"customers_email":1,"products_category":0},"invalid_records":{"customers":22,"products":16,"orders":16,"shipments":23,"returns":23},"schema_violations":{}},"insights":{"top_customers":[],"top_products":[],"shipping_performance":{},"return_analysis":{}},"cleaned_data":[]}

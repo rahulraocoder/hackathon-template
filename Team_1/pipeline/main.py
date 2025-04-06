@@ -1,3 +1,4 @@
+import os
 import json
 import argparse
 from collections import defaultdict
@@ -86,24 +87,34 @@ def analyze_data(customers_path, products_path, orders_path, shipments_path, ret
         'return_reason_analysis': return_metrics
     }
 
-def submit_to_evaluator(metrics, evaluator_url='http://localhost:9003'):
+def submit_to_evaluator(metrics):
     """Submit computed metrics to evaluator"""
-    endpoint = f"{evaluator_url}/api/submit"
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        'team_key': 'team_participant',
-        'metrics': metrics
+    evaluator_url = os.getenv('EVALUATOR_URL')
+    api_key = os.getenv('API_KEY')
+    
+    if not evaluator_url or not api_key:
+        raise ValueError("Missing required environment variables (EVALUATOR_URL, API_KEY)")
+        
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': api_key
     }
-    response = requests.post(endpoint, json=data, headers=headers)
-    return response.json()
+    
+    try:
+        response = requests.post(evaluator_url, json=metrics, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error submitting to evaluator: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--customers', required=True)
-    parser.add_argument('--products', required=True)
-    parser.add_argument('--orders', required=True)
-    parser.add_argument('--shipments', required=True)
-    parser.add_argument('--returns', required=True)
+    parser.add_argument('--customers', default=os.getenv('CUSTOMERS_PATH'))
+    parser.add_argument('--products', default=os.getenv('PRODUCTS_PATH'))
+    parser.add_argument('--orders', default=os.getenv('ORDERS_PATH'))
+    parser.add_argument('--shipments', default=os.getenv('SHIPMENTS_PATH'))
+    parser.add_argument('--returns', default=os.getenv('RETURNS_PATH'))
     args = parser.parse_args()
 
     metrics = analyze_data(

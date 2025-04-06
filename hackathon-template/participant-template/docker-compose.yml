@@ -1,7 +1,0 @@
-version: '3.8'
-
-services:
-  pipeline:
-    build: .
-    volumes:
-      - ../shared/data:/data
